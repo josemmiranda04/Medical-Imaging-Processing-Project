@@ -3,7 +3,7 @@
 %externo do parênquima cerebral. 
 %Calcular a área total delimitada em 
 %píxeis e o perímetro do contorno. 
-%% Leitura de dados
+%% Leitura de dados e Ponderações
 
 img = imread('T02_brain_mri_axial.jpg');
 %a imagem é uma matriz 3D, ou seja, não está com a escala de cinzentos mas sim cores
@@ -11,24 +11,36 @@ size(img)
 img_gray = rgb2gray(img);
 size(img_gray)
 
+%%OTSU 1 - Provar que não funciona diretamente
+level = graythresh(img_gray);
+img_otsu = imbinarize(img_gray, level);
+
+figure Name Original
+subplot(1,3,1); imshow(img_gray); title('Imagem Original');
+subplot(1,3,2); imhist(img_gray);  title('Histograma Original');
+subplot(1,3,3); imshow(img_otsu);  title('Otsu'); %Não funciona diretamente na imagem original, imagem incompleta
+
 %% Pré-processamento
 
-%estica o histograma para maximizar a diferença de intensidade entre o tecido cerebral(claro) e o líquido/fundo(escuros)
-img_adj = imadjust(img_gray, [0.3 0.8], [0 1]);
+%EqHist
+img_eqhist = histeq(img_gray);
 
-%CLAHE
+%CLAHE 1
+img_clahe_normal = adapthisteq(img_gray);
+
+%CLAHE 2
 img_clahe = adapthisteq(img_gray, 'NumTiles',[16 16], 'Distribution','rayleigh');
 
 
 %% OTSU
 
 %%OTSU 1
-level = graythresh(img_gray);
-img_bin1 = imbinarize(img_gray, level);
+level = graythresh(img_eqhist);
+img_bin1 = imbinarize(img_eqhist, level);
 
 %%OTSU 2
-level = graythresh(img_adj);
-img_bin2 = imbinarize(img_adj, level);
+level = graythresh(img_clahe_normal);
+img_bin2 = imbinarize(img_clahe_normal, level);
 
 %%OTSU 3
 level = graythresh(img_clahe);
@@ -37,17 +49,17 @@ img_bin3 = imbinarize(img_clahe, level);
 %% Visualização
 
 figure Name 'Pré-Processamento'
-subplot(3,2,1); imshow(img_gray); title('Imagem Original');
-subplot(3,2,2); imhist(img_gray);  title('Histograma Original');
-subplot(3,2,3); imshow(img_adj);  title('Imajudst (Default)');
-subplot(3,2,4); imhist(img_adj);  title('Histograma Imajudst (Default)');
-subplot(3,2,5); imshow(img_clahe);  title('CLAHE');
-subplot(3,2,6); imhist(img_clahe);  title('Histograma CLAHE');%Melhor porque tem maior separação
+subplot(3,2,1); imshow(img_eqhist); title('Eqhist (Default)');
+subplot(3,2,2); imhist(img_eqhist);  title('Histograma Equhist (Default)');
+subplot(3,2,3); imshow(img_clahe_normal);  title('CLAHE NORMAL');
+subplot(3,2,4); imhist(img_clahe_normal);  title('CLAHE NORMAL');
+subplot(3,2,5); imshow(img_clahe);  title('CLAHE RAYLEIGH');
+subplot(3,2,6); imhist(img_clahe);  title('Histograma CLAHE RAYLEIGH');%Melhor porque tem maior separação
 
 figure Name 'OTSU'
-subplot(1,3,1); imshow(img_bin1);  title('Otsu Norm');
-subplot(1,3,2); imshow(img_bin2);  title('Otsu Hist');
-subplot(1,3,3); imshow(img_bin3);  title('Otsu CLAHE'); 
+subplot(1,3,1); imshow(img_bin1);  title('Otsu EqHist');
+subplot(1,3,2); imshow(img_bin2);  title('Otsu CLAHE NORMAL');
+subplot(1,3,3); imshow(img_bin3);  title('Otsu CLAHE RAYLEIGH'); 
 
 %% Region Growing
 
@@ -81,8 +93,8 @@ img_overhull = bwconvhull(img_actc3);
 %Maior precisão
 img_clean = bwmorph(img_actc3,'clean') %remove pontos espalhados
 
-kernel = strel("sphere",3)
-img_closed = imclose(img_clean, kernel); %Completa o contorno da imagem
+kernel_sphere = strel("sphere",3)
+img_closed = imclose(img_clean, kernel_sphere); %Completa o contorno da imagem
 
 %Hole Filling
 img_area = imfill(img_closed, 'holes');
@@ -142,3 +154,43 @@ h2 = plot(nan,nan,'b');
 
 legend([h1 h2], {'Área','Perímetro'});
 title('Resultado Final');
+hold off;
+
+%% Tronco Cerebral
+%Optimal Image
+img_adj = imadjust(img_gray, [0.4 0.9], [0 1]);
+
+%Region Growing
+mask3 = zeros(size(img_adj)); %-0.14
+mask3(145:end-95,130:end-105) = 1; %(y, x)
+img_tronco = activecontour(img_adj, mask3, 700, 'Chan-Vese', 'ContractionBias', 0.18); %aumento do tempo de processamento mas boa deteção
+
+
+%Morfologia
+img_clean = bwmorph(img_tronco,'clean')
+kernel_disk = strel('disk',5)
+img_area_tc = imclose(img_clean, kernel_disk); %Completa o contorno da imagem
+
+figure Name 'Tronco Cerebral',  imshow(labeloverlay(img_clahe,img_area_tc))
+
+
+
+%% Córtex Cerebral
+
+% Optimal Image
+img_adj = imadjust(img_gray, [0.3 0.8], [0 1]);
+
+%Region Growing
+mask3 = zeros(size(img_adj)); %-0.14
+mask3(95:end-155,125:end-85) = 1; %(y, x)
+img_all = activecontour(img_adj, mask3, 700, 'Chan-Vese'); %aumento do tempo de processamento mas boa deteção
+img_dil = imdilate(img_all, kernel_disk); % este dilate serve para aumentar mais o all e evitar que haja restícios significativos
+img_cc = img_actc3 - img_dil;
+img_cc = img_cc > 0;
+
+%Morfologia
+img_closed = imclose(img_cc, kernel_sphere); %Completa o contorno da imagem primeirom, para garantir distinção de áreas
+img_clean = bwareafilt(img_closed, 1); %Deixa apenas o maior objeto
+kernel_sphere = strel("sphere",3);
+img_cc_area = imfill(img_clean, 'holes');
+figure Name 'Córtex Cerebral', imshow(labeloverlay(img_clahe, img_cc_area))
